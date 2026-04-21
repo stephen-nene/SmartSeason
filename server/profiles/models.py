@@ -12,21 +12,8 @@ from django.core.exceptions import ValidationError
 from django.contrib.gis.db import models as gis_models
 
 from seasons.models import CropSeason,FieldAssignment
-import re
-
-KRA_PIN_REGEX = re.compile(r"^[A-Z][0-9]{9}[A-Z]$")
 
 
-def validate_kra_pin(value: str) -> None:
-    if not value:
-        return  # allow blank/null (handled by model field)
-
-    value = value.strip().upper()
-
-    if not KRA_PIN_REGEX.fullmatch(value):
-        raise ValidationError(
-            "Invalid KRA PIN format. Expected format: A123456789B"
-        )
 
 UserType = TypeVar("UserType", bound="User")
 

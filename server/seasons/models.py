@@ -11,11 +11,12 @@ class FieldUpdateStage(models.TextChoices):
     GROWING = "growing"
     READY = "ready"
     HARVESTED = "harvested"
-    # Keep your existing stages if needed
+
     PLANTING = "planting"
     GERMINATION = "germination"
     SEEDLING = "seedling"
     VEGETATIVE = "vegetative"
+
     FLOWERING = "flowering"
     FRUITING = "fruiting"
     HARVEST = "harvest"
@@ -40,13 +41,22 @@ class TimeStampedModel(models.Model):
         abstract = True
 
 
+class CropType(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    description = models.TextField()
+    growth_cycle_days = models.IntegerField()
+
+    def __str__(self):
+        return self.name
+
+
+
 
 class CropSeason(TimeStampedModel):
     name = models.CharField(max_length=50, unique=True)
     field  = models.ForeignKey('profiles.Field', on_delete=models.CASCADE)
-    # crop_type = models.ForeignKey('profiles.CropType', on_delete=models.CASCADE)
-    crop_type = models.CharField(max_length=50)
-    slot = models.CharField(max_length=20)
+    crop_type = models.ForeignKey(CropType, on_delete=models.CASCADE)
+    # crop_type = models.CharField(max_length=50)
     planting_date = models.DateField()
     expected_harvest_date = models.DateField()
     actual_harvest_date = models.DateField(blank=True, null=True)
@@ -54,7 +64,6 @@ class CropSeason(TimeStampedModel):
     active = models.BooleanField(default=True)
     status = models.CharField(max_length=50, choices=SeasonStatus.choices, default=SeasonStatus.ACTIVE)
     created_by = models.ForeignKey('profiles.User', on_delete=models.CASCADE)
-    # full_field = models.BooleanField(default=False)
 
 
     def calculate_status(self):
@@ -131,8 +140,9 @@ class CropSeason(TimeStampedModel):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields= ["field", "slot"],
+                fields= ["field", "status"],
                 condition=models.Q(status="active"),
+                name="one_active_season_per_field"
             )
         ]
 
@@ -140,17 +150,17 @@ class FieldAssignment(models.Model):
     # crop_season = models.ForeignKey(CropSeason, on_delete=models.CASCADE)
     # This allows an agent handles ALL seasons self.field
     field = models.ForeignKey('profiles.Field', on_delete=models.CASCADE)
-    user = models.ForeignKey('profiles.User', on_delete=models.CASCADE)
+    agent = models.ForeignKey('profiles.User', on_delete=models.CASCADE)
     assigned_at = models.DateTimeField(auto_now_add=True)
     assigned_by = models.ForeignKey('profiles.User', on_delete=models.CASCADE)
 
     def __str__(self):
         # return f"{self.user.username} - {self.crop_season_id.field.name}"
-        return f"{self.user.username} -  {self.field.name}"
+        return f"{self.agent.username} -  {self.field.name}"
 
     class Meta:
-        pass
-        # unique_together = ('crop_season', 'user')
+        # pass
+        unique_together = ('field', 'agent')
         # constraints = [
         #     models.UniqueConstraint(
         #         fields=["user"],
@@ -165,7 +175,7 @@ class FieldUpdate(TimeStampedModel):
     stage = models.CharField(max_length=50, choices=FieldUpdateStage.choices, null=False, blank=False)
     notes = models.TextField()
     health_status = models.CharField(max_length=50)
-    
+
     def clean(self):
         super().clean()
         if self.crop_season and self.crop_season.status == SeasonStatus.COMPLETED:
@@ -179,10 +189,3 @@ class FieldUpdate(TimeStampedModel):
             self.crop_season.save()
         super().save(*args, **kwargs)
 
-class CropType(models.Model):
-    name = models.CharField(max_length=50, unique=True)
-    description = models.TextField()
-    growth_cycle_days = models.IntegerField()
-
-    def __str__(self):
-        return self.name

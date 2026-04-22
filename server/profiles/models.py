@@ -1,5 +1,5 @@
 
-# myapp/models.py
+# profiles/models.py
 import uuid
 from typing import TypeVar
 from django.db import models
@@ -7,12 +7,9 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractUser, Group, Permission, BaseUserManager
 from django.core.exceptions import ValidationError
 
-from django.core.exceptions import ValidationError
-
 from django.contrib.gis.db import models as gis_models
 
 from seasons.models import CropSeason,FieldAssignment
-
 
 
 UserType = TypeVar("UserType", bound="User")
@@ -25,16 +22,19 @@ class PaymentInterval(models.TextChoices):
     MONTHLY = "monthly"
     # YEARLY = "yearly"
 
+
 class UserRole(models.TextChoices):
     EMPLOYEE = "employee"
     CUSTOMER = "customer"
     ADMIN = "admin"
+
 
 class UserStatus(models.TextChoices):
     INACTIVE = "inactive"
     ACTIVE = "active"
     DEACTIVATED = "deactivated"
     SUSPENDED = "suspended"
+
 
 class TimeStampedModel(models.Model):
     '''__str__(self):
@@ -45,7 +45,6 @@ class TimeStampedModel(models.Model):
 
     class Meta:
         abstract = True
-
 
 
 class CustomUserManager(BaseUserManager):
@@ -164,3 +163,43 @@ class Field(TimeStampedModel):
 
     def __str__(self):
         return self.name
+
+
+class FieldAttachment(TimeStampedModel):
+    """Attachments specific to fields (maps, boundary documents, ownership docs, etc.)"""
+
+    ATTACHMENT_TYPES = [
+        ('boundary_map', 'Boundary Map'),
+        ('soil_report', 'Soil Report'),
+        ('ownership_doc', 'Ownership Document'),
+        ('field_photo', 'Field Photo'),
+        ('other', 'Other'),
+    ]
+
+    field = models.ForeignKey(Field, on_delete=models.CASCADE, related_name='attachments')
+    file = models.FileField(upload_to='fields/attachments/')
+    filename = models.CharField(max_length=255)
+    file_size = models.IntegerField(help_text='Size in bytes')
+    mime_type = models.CharField(max_length=100)
+    attachment_type = models.CharField(max_length=20, choices=ATTACHMENT_TYPES, default='other')
+    description = models.TextField(blank=True)
+    uploaded_by = models.ForeignKey('User', on_delete=models.SET_NULL, null=True)
+
+    class Meta:
+        db_table = 'field_attachments'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['field', 'attachment_type']),
+            models.Index(fields=['created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.field.name} - {self.filename}"
+
+    def save(self, *args, **kwargs):
+        if not self.filename and self.file:
+            self.filename = self.file.name.split('/')[-1]
+        if not self.file_size and self.file:
+            self.file_size = self.file.size
+        super().save(*args, **kwargs)
+

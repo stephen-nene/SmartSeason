@@ -1,4 +1,6 @@
+# seasons/models.py
 from django.db import models
+from django.contrib.gis.db import models as gis_models
 
 from django.core.exceptions import ValidationError
 
@@ -188,4 +190,98 @@ class FieldUpdate(TimeStampedModel):
             self.crop_season.current_stage = self.stage
             self.crop_season.save()
         super().save(*args, **kwargs)
+
+
+class FieldUpdateAttachment(TimeStampedModel):
+    """Attachments for field updates (photos of crops, issues, etc.)"""
+
+    ATTACHMENT_TYPES = [
+        ('crop_photo', 'Crop Photo'),
+        ('issue_photo', 'Issue/Damage Photo'),
+        ('measurement', 'Measurement Record'),
+        ('weather_report', 'Weather Report'),
+        ('pest_report', 'Pest/Disease Report'),
+        ('other', 'Other'),
+    ]
+
+    field_update = models.ForeignKey('FieldUpdate', on_delete=models.CASCADE, related_name='attachments')
+    file = models.FileField(upload_to='field_updates/attachments/')
+    filename = models.CharField(max_length=255)
+    file_size = models.IntegerField(help_text='Size in bytes')
+    mime_type = models.CharField(max_length=100)
+    attachment_type = models.CharField(max_length=20, choices=ATTACHMENT_TYPES, default='crop_photo')
+    description = models.TextField(blank=True)
+    uploaded_by = models.ForeignKey('User', on_delete=models.SET_NULL, null=True)
+
+    # Optional: Add location data for geotagged photos
+    location = gis_models.PointField(srid=4326, null=True, blank=True)
+
+    class Meta:
+        db_table = 'field_update_attachments'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['field_update', 'attachment_type']),
+            models.Index(fields=['created_at']),
+        ]
+
+    def __str__(self):
+        return f"Update {self.field_update.id} - {self.filename}"
+
+    def save(self, *args, **kwargs):
+        if not self.filename and self.file:
+            self.filename = self.file.name.split('/')[-1]
+        if not self.file_size and self.file:
+            self.file_size = self.file.size
+        super().save(*args, **kwargs)
+
+
+class CropTypeAttachment(TimeStampedModel):
+    """Attachments for crop types (reference images, growing guides, disease references, etc.)"""
+
+    ATTACHMENT_TYPES = [
+        ('reference_image', 'Reference Image'),
+        ('growth_stage_guide', 'Growth Stage Guide'),
+        ('disease_guide', 'Disease/Pest Guide'),
+        ('variety_specs', 'Variety Specifications'),
+        ('planting_guide', 'Planting Guide'),
+        ('harvest_guide', 'Harvest Guide'),
+        ('other', 'Other'),
+    ]
+
+    crop_type = models.ForeignKey('CropType', on_delete=models.CASCADE, related_name='attachments')
+    file = models.FileField(upload_to='crop_types/attachments/')
+    filename = models.CharField(max_length=255)
+    file_size = models.IntegerField(help_text='Size in bytes')
+    mime_type = models.CharField(max_length=100)
+    attachment_type = models.CharField(max_length=20, choices=ATTACHMENT_TYPES, default='reference_image')
+    description = models.TextField(blank=True)
+    uploaded_by = models.ForeignKey('User', on_delete=models.SET_NULL, null=True)
+
+    # Optional: Link to specific growth stage
+    growth_stage = models.CharField(
+        max_length=50,
+        choices=FieldUpdateStage.choices,
+        blank=True,
+        null=True,
+        help_text="If this attachment relates to a specific growth stage"
+    )
+
+    class Meta:
+        db_table = 'crop_type_attachments'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['crop_type', 'attachment_type']),
+            models.Index(fields=['growth_stage']),
+        ]
+
+    def __str__(self):
+        return f"{self.crop_type.name} - {self.filename}"
+
+    def save(self, *args, **kwargs):
+        if not self.filename and self.file:
+            self.filename = self.file.name.split('/')[-1]
+        if not self.file_size and self.file:
+            self.file_size = self.file.size
+        super().save(*args, **kwargs)
+
 

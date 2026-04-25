@@ -93,10 +93,11 @@ class CropSeason(TimeStampedModel):
         days_since_planting = (today - self.planting_date).days
 
         # Check for delayed growth (no updates in last 7 days)
-        last_update = self.fieldupdate_set.order_by('-created_at').first()
-        if last_update and (today - last_update.created_at.date()).days > 7:
-            if self.current_stage not in [FieldUpdateStage.READY, FieldUpdateStage.HARVESTED]:
-                return SeasonStatus.AT_RISK
+        if self.pk:
+            last_update = self.fieldupdate_set.order_by('-created_at').first()
+            if last_update and (today - last_update.created_at.date()).days > 7:
+                if self.current_stage not in [FieldUpdateStage.READY, FieldUpdateStage.HARVESTED]:
+                    return SeasonStatus.AT_RISK
 
         # compare days since planting to growth cycle of crop
         total_cycle = self.crop_type.growth_cycle_days
@@ -108,9 +109,9 @@ class CropSeason(TimeStampedModel):
 
 
     def save(self, *args, **kwargs):
-        # Don't call computed_status() as method if it's a property
-        if not self.actual_harvest_date:
-            self.status = self.computed_status  # Remove the ()
+        # if not self.actual_harvest_date:
+        if self.pk:
+            self.status = self.computed_status
         super().save(*args, **kwargs)
 
     @property
@@ -158,15 +159,33 @@ class FieldUpdate(TimeStampedModel):
     def clean(self):
         super().clean()
         if self.crop_season and self.crop_season.status == SeasonStatus.COMPLETED:
-            raise ValidationError("Cannot update a completed season")
-
+            if not self.pk:
+                raise ValidationError("Cannot update a completed season")
     def save(self, *args, **kwargs):
-        self.full_clean()
+        # Skip full_clean during seeding or when explicitly told to skip
+        skip_validation = kwargs.pop('skip_validation', False)
+
+        if not skip_validation:
+            self.full_clean()
+
         # Update the crop season's current stage
         if self.crop_season.current_stage != self.stage:
             self.crop_season.current_stage = self.stage
-            self.crop_season.save()
+            # Skip computed_status trigger during seeding for completed seasons
+            if self.crop_season.status == SeasonStatus.COMPLETED:
+                self.crop_season.save(update_fields=['current_stage'])
+            else:
+                self.crop_season.save()
+
         super().save(*args, **kwargs)
+
+    # def save(self, *args, **kwargs):
+    #     self.full_clean()
+    #     # Update the crop season's current stage
+    #     if self.crop_season.current_stage != self.stage:
+    #         self.crop_season.current_stage = self.stage
+    #         self.crop_season.save()
+    #     super().save(*args, **kwargs)
 
 
 class FieldUpdateAttachment(TimeStampedModel):

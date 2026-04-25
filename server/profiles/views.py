@@ -23,9 +23,13 @@ from .serializers import (
     ChangePasswordSerializer,
     FieldSerializer,
     FieldAssignmentSerializer,
+    FieldListSerializer,
+    FieldDetailSerializer,
+    AssignedAgentSerializer,
     FieldAttachmentSerializer,
     BulkFieldAssignmentSerializer,
-    TokenLoginSerializer
+    TokenLoginSerializer,
+
 )
 from .permissions import (
     IsAdmin,
@@ -190,24 +194,52 @@ class UserViewSet(viewsets.ModelViewSet):
 
 # ==================== FIELD VIEWS ====================
 
+
+
 class FieldViewSet(viewsets.ModelViewSet):
     """Field CRUD operations"""
     queryset = Field.objects.all()
     serializer_class = FieldSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_serializer_class(self):
+        """Return appropriate serializer based on action"""
+        if self.action == 'retrieve':
+            return FieldDetailSerializer
+        if self.action == 'list':
+            return FieldDetailSerializer
+        if self.action in ['agents', 'assign_agents', 'remove_agents']:
+            return AssignedAgentSerializer
+        if self.action == 'attachments':
+            return FieldAttachmentSerializer
+        return FieldSerializer
+
     def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'assign_agents', 'remove_agents']:
             return [IsAdminOrCoordinator()]
         return super().get_permissions()
 
     def get_queryset(self):
-        queryset = Field.objects.all()
+        queryset = Field.objects.prefetch_related(
+            'attachments',
+            'fieldassignment_set__agent'
+        ).annotate(
+            active_season_count=models.Count(
+                'seasons',
+                filter=models.Q(seasons__status='active')
+            ),
+            active_agent_count=models.Count(
+                'fieldassignment'
+            )
+        ).order_by('name')
 
         # Filter by active seasons
         has_active_seasons = self.request.query_params.get('has_active_seasons', None)
-        if has_active_seasons:
-            queryset = queryset.filter(cropseason__status='active').distinct()
+        if has_active_seasons is not None:
+            if has_active_seasons.lower() == 'true':
+                queryset = queryset.filter(active_season_count__gt=0)
+            else:
+                queryset = queryset.filter(active_season_count=0)
 
         # Search by name
         search = self.request.query_params.get('search', None)
@@ -215,6 +247,28 @@ class FieldViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(name__icontains=search)
 
         return queryset
+
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Get single field with all related data:
+        - Active seasons
+        - Attachments
+        - Assigned agents
+        """
+        instance = self.get_object()
+
+        # Use the detail serializer which includes everything
+        serializer = FieldDetailSerializer(instance, context={'request': request})
+
+        return Response({
+            'data': serializer.data,
+            'meta': {
+                'total_seasons': instance.seasons.count(),
+                'active_seasons': instance.seasons.filter(status='active').count(),
+                'assigned_agents': instance.fieldassignment_set.count(),
+                'attachments': instance.attachments.count(),
+            }
+        })
 
     @action(detail=True, methods=['get'])
     def agents(self, request, pk=None):

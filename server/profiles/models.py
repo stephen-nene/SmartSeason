@@ -7,25 +7,17 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractUser, Group, Permission, BaseUserManager
 from django.core.exceptions import ValidationError
 
-from django.contrib.gis.db import models as gis_models
+# from django.contrib.gis.db import models as gis_models
 
-from seasons.models import CropSeason,FieldAssignment
+from seasons.models import CropSeason
 
 
 UserType = TypeVar("UserType", bound="User")
 
-# enums
-class PaymentInterval(models.TextChoices):
-    # DAILY = "daily"
-    # WEEKLY = "weekly"
-    BIMONTHLY = "bimonthly"
-    MONTHLY = "monthly"
-    # YEARLY = "yearly"
-
 
 class UserRole(models.TextChoices):
-    EMPLOYEE = "employee"
-    CUSTOMER = "customer"
+    FIELD_AGENT = "field_agent"
+    COORDINATOR = "coordinator"
     ADMIN = "admin"
 
 
@@ -83,30 +75,22 @@ class User(AbstractUser, TimeStampedModel):
     Custom User model extending AbstractUser with role/status and optional email/phone identifiers.
     Login will still work with multiple identifiers via an auth backend.
     """
-    ROLE_CHOICES = [
-        ('admin', 'Admin'),
-        ('coordinator', 'Coordinator'),
-        # fields agent
-        ('field_agent', 'Field Agent'),
-    ]
-    STATUS_CHOICES = [
-        ('inactive', 'Inactive'),
-        ('active', 'Active'),
-        ('deactivated', 'Deactivated'),
-    ]
     TOKEN_CONTEXT = [
         ('activation', 'Account Activation'),
         ('password_reset', 'Password Reset'),
     ]
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = ["username"]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    # memorable predictable code(like say mMDF001f for farmer,MDF001e for employee,MDF001c for customer)
     phone_number = models.CharField(max_length=50, blank=True, null=True, unique=True)
     email = models.EmailField(blank=False, null=False, unique=True)
     profile_image = models.FileField(upload_to="profiles/", blank=True, null=True)
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='customer')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='inactive')
+    role = models.CharField(max_length=20, choices=UserRole.choices, default=UserRole.FIELD_AGENT)
+    status = models.CharField(max_length=20, choices=UserStatus.choices, default=UserStatus.INACTIVE)
     email_verified = models.BooleanField(default=False)
+    # token_type = models.CharField(choices=TOKEN_CONTEXT, blank=True,null=True )
+    # token = models.UUIDField(default=uuid.uuid4, unique=True)
     token = models.UUIDField(choices=TOKEN_CONTEXT, blank=True, null=True, unique=True)
     token_expiry = models.DateTimeField(null=True, blank=True)
 
@@ -130,7 +114,7 @@ class User(AbstractUser, TimeStampedModel):
 
     def get_assigned_seasons(self):
         """Get all crop seasons assigned to this agent"""
-        if self.role in ['admin', 'coordinator']:
+        if self.role in [UserRole.ADMIN, UserRole.COORDINATOR]:
             return CropSeason.objects.all()
 
         assigned_fields = FieldAssignment.objects.filter(user=self).values_list('field', flat=True)
@@ -138,7 +122,7 @@ class User(AbstractUser, TimeStampedModel):
 
     def can_manage_season(self, season):
         """Check if user can manage a specific season"""
-        if self.role in ['admin', 'coordinator']:
+        if self.role in [UserRole.ADMIN, UserRole.COORDINATOR]:
             return True
 
         if self.role == 'field_agent':
@@ -157,12 +141,38 @@ class User(AbstractUser, TimeStampedModel):
 class Field(TimeStampedModel):
     name = models.CharField(max_length=50, unique=True)
     description = models.TextField()
-    boundary = gis_models.PolygonField(srid=4326)
+    # boundary = gis_models.PolygonField(srid=4326)
     # add more fields as needed
     max_active_seasons = models.PositiveIntegerField(default=1)
 
     def __str__(self):
         return self.name
+
+
+class FieldAssignment(models.Model):
+    # crop_season = models.ForeignKey(CropSeason, on_delete=models.CASCADE)
+    # This allows an agent handles ALL seasons in self.field
+    field = models.ForeignKey(Field, on_delete=models.CASCADE)
+    agent = models.ForeignKey(User, related_name='assigned_fields', on_delete=models.CASCADE)
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    assigned_by = models.ForeignKey(User, related_name='assignments_made', on_delete=models.CASCADE)
+
+        # return f"{self.user.username} - {self.crop_season_id.field.name}"
+
+    def __str__(self):
+        return f"{self.agent.username} - {self.field.name}"
+
+
+    class Meta:
+        # pass
+        unique_together = ('field', 'agent')
+        # constraints = [
+        #     models.UniqueConstraint(
+        #         fields=["user"],
+        #         condition=models.Q(crop_season__status="active"),
+        #         name="one_active_season_per_agent"
+        #     )
+        # ]
 
 
 class FieldAttachment(TimeStampedModel):

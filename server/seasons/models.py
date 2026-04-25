@@ -1,29 +1,35 @@
 # seasons/models.py
 from django.db import models
-from django.contrib.gis.db import models as gis_models
+# from django.contrib.gis.db import models as gis_models
 
 from django.core.exceptions import ValidationError
+from django.conf import settings
 
 # Create your models here.
 
 
+
+# class FieldUpdateStage(models.TextChoices):
+#     PLANTED = "planted"
+#     GROWING = "growing"
+#     READY = "ready"
+#     HARVESTED = "harvested"
+
+#     PLANTING = "planting"
+#     GERMINATION = "germination"
+#     SEEDLING = "seedling"
+#     VEGETATIVE = "vegetative"
+
+#     FLOWERING = "flowering"
+#     FRUITING = "fruiting"
+#     HARVEST = "harvest"
+#     DORMANT = "dormant"
 
 class FieldUpdateStage(models.TextChoices):
     PLANTED = "planted"
     GROWING = "growing"
     READY = "ready"
     HARVESTED = "harvested"
-
-    PLANTING = "planting"
-    GERMINATION = "germination"
-    SEEDLING = "seedling"
-    VEGETATIVE = "vegetative"
-
-    FLOWERING = "flowering"
-    FRUITING = "fruiting"
-    HARVEST = "harvest"
-    DORMANT = "dormant"
-
 
 class SeasonStatus(models.TextChoices):
     ACTIVE = "active"
@@ -56,37 +62,35 @@ class CropType(models.Model):
 
 class CropSeason(TimeStampedModel):
     name = models.CharField(max_length=50, unique=True)
-    field  = models.ForeignKey('profiles.Field', on_delete=models.CASCADE)
-    crop_type = models.ForeignKey(CropType, on_delete=models.CASCADE)
-    # crop_type = models.CharField(max_length=50)
+    field  = models.ForeignKey('profiles.Field', related_name='seasons', on_delete=models.CASCADE)
+    crop_type = models.ForeignKey(CropType, related_name='seasons', on_delete=models.CASCADE)
     planting_date = models.DateField()
     expected_harvest_date = models.DateField()
     actual_harvest_date = models.DateField(blank=True, null=True)
-    current_stage = models.CharField(max_length=50)
-    active = models.BooleanField(default=True)
+
     status = models.CharField(max_length=50, choices=SeasonStatus.choices, default=SeasonStatus.ACTIVE)
-    created_by = models.ForeignKey('profiles.User', on_delete=models.CASCADE)
+    current_stage = models.CharField(max_length=50, choices=FieldUpdateStage.choices, default=FieldUpdateStage.PLANTED)
 
+    active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='seasons_created', on_delete=models.CASCADE)
 
-    def calculate_status(self):
+    @property
+    def computed_status(self):
         """Calculate season status based on planting date, expected harvest, and updates"""
-        from datetime import date, timedelta
         from django.utils import timezone
-
         today = timezone.now().date()
 
-        if self.actual_harvest_date:
+        # Completed
+        if self.current_stage == FieldUpdateStage.HARVESTED or self.actual_harvest_date:
             return SeasonStatus.COMPLETED
 
-        if self.current_stage == FieldUpdateStage.HARVESTED:
-            return SeasonStatus.COMPLETED
+        # At Risk
+        if today > self.expected_harvest_date and self.current_stage != FieldUpdateStage.HARVESTED:
+            return SeasonStatus.AT_RISK
+
 
         # Calculate days since planting
         days_since_planting = (today - self.planting_date).days
-
-        # Check if past expected harvest date
-        if today > self.expected_harvest_date:
-            return SeasonStatus.AT_RISK
 
         # Check for delayed growth (no updates in last 7 days)
         last_update = self.fieldupdate_set.order_by('-created_at').first()
@@ -94,24 +98,19 @@ class CropSeason(TimeStampedModel):
             if self.current_stage not in [FieldUpdateStage.READY, FieldUpdateStage.HARVESTED]:
                 return SeasonStatus.AT_RISK
 
-        # Check for growth stage delays
-        expected_stages = {
-            FieldUpdateStage.PLANTED: 0,
-            FieldUpdateStage.GROWING: 14,
-            FieldUpdateStage.READY: 45,
-        }
+        # compare days since planting to growth cycle of crop
+        total_cycle = self.crop_type.growth_cycle_days
+        if days_since_planting > total_cycle:
+            return SeasonStatus.AT_RISK
 
-        if self.current_stage in expected_stages:
-            expected_days = expected_stages[self.current_stage]
-            if days_since_planting > expected_days + 14:  # 2 weeks buffer
-                return SeasonStatus.AT_RISK
-
+        # Active
         return SeasonStatus.ACTIVE
 
+
     def save(self, *args, **kwargs):
-        # Update status automatically
+        # Don't call computed_status() as method if it's a property
         if not self.actual_harvest_date:
-            self.status = self.calculate_status()
+            self.status = self.computed_status  # Remove the ()
         super().save(*args, **kwargs)
 
     @property
@@ -141,42 +140,20 @@ class CropSeason(TimeStampedModel):
     #  Enforce ONE active season per field
     class Meta:
         constraints = [
-            models.UniqueConstraint(
-                fields= ["field", "status"],
-                condition=models.Q(status="active"),
-                name="one_active_season_per_field"
-            )
+        models.UniqueConstraint(
+    fields=["field"],
+    condition=models.Q(status="active"),
+    name="one_active_season_per_field"
+)
         ]
 
-class FieldAssignment(models.Model):
-    # crop_season = models.ForeignKey(CropSeason, on_delete=models.CASCADE)
-    # This allows an agent handles ALL seasons self.field
-    field = models.ForeignKey('profiles.Field', on_delete=models.CASCADE)
-    agent = models.ForeignKey('profiles.User', on_delete=models.CASCADE)
-    assigned_at = models.DateTimeField(auto_now_add=True)
-    assigned_by = models.ForeignKey('profiles.User', on_delete=models.CASCADE)
 
-    def __str__(self):
-        # return f"{self.user.username} - {self.crop_season_id.field.name}"
-        return f"{self.agent.username} -  {self.field.name}"
-
-    class Meta:
-        # pass
-        unique_together = ('field', 'agent')
-        # constraints = [
-        #     models.UniqueConstraint(
-        #         fields=["user"],
-        #         condition=models.Q(crop_season__status="active"),
-        #         name="one_active_season_per_agent"
-        #     )
-        # ]
 
 class FieldUpdate(TimeStampedModel):
     crop_season = models.ForeignKey(CropSeason, on_delete=models.CASCADE)
-    agent = models.ForeignKey('profiles.User', on_delete=models.CASCADE)
+    agent = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='field_updates', on_delete=models.CASCADE)
     stage = models.CharField(max_length=50, choices=FieldUpdateStage.choices, null=False, blank=False)
     notes = models.TextField()
-    health_status = models.CharField(max_length=50)
 
     def clean(self):
         super().clean()
@@ -211,10 +188,10 @@ class FieldUpdateAttachment(TimeStampedModel):
     mime_type = models.CharField(max_length=100)
     attachment_type = models.CharField(max_length=20, choices=ATTACHMENT_TYPES, default='crop_photo')
     description = models.TextField(blank=True)
-    uploaded_by = models.ForeignKey('User', on_delete=models.SET_NULL, null=True)
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
 
     # Optional: Add location data for geotagged photos
-    location = gis_models.PointField(srid=4326, null=True, blank=True)
+    # location = gis_models.PointField(srid=4326, null=True, blank=True)
 
     class Meta:
         db_table = 'field_update_attachments'
@@ -255,7 +232,7 @@ class CropTypeAttachment(TimeStampedModel):
     mime_type = models.CharField(max_length=100)
     attachment_type = models.CharField(max_length=20, choices=ATTACHMENT_TYPES, default='reference_image')
     description = models.TextField(blank=True)
-    uploaded_by = models.ForeignKey('User', on_delete=models.SET_NULL, null=True)
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
 
     # Optional: Link to specific growth stage
     growth_stage = models.CharField(
